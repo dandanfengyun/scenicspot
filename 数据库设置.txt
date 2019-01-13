@@ -1,6 +1,0 @@
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'parktest',
-        'USER': 'fengyun',
-        'PASSWORD': '123456',
-        'HOST': '10.31.153.34',
-        'PORT': 3306,
