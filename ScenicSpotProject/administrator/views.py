@@ -4,23 +4,25 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User, AnonymousUser
 from django.core.cache import caches
-from django.core.mail import send_mail
 from django.http import HttpResponse
 from django.shortcuts import render, redirect
 
 # Create your views here.
 
 from rest_framework import status
-from rest_framework.generics import CreateAPIView, ListCreateAPIView, RetrieveAPIView
+from rest_framework.generics import ListCreateAPIView, GenericAPIView, ListAPIView, CreateAPIView, \
+    RetrieveUpdateDestroyAPIView
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.views import APIView
 
-from .mythrottles import MyThrottles
+
 from .until import generate_code
-from .auth import SuperAdminAuth
+from .myauth import SuperAdminAuth
+from .mythrottles import MyThrottles
+from .permission import SuperAdminPermission
 from .models import SuperAdmin
-from .serializer import UserSerializer, SuperAdminSerializer
+from .serializer import *
 from .tasks import send_code
 
 user_cache = caches['user']
@@ -71,63 +73,211 @@ class SuperAdminLogin(ListCreateAPIView):
         return Response(data={'code': 1, 'msg': '假装登录页面'})
 
     def post(self, request, *args, **kwargs):
+        # 验证验证码
+        # 如果验证码 不同  则可能验证码过期  或者 其他人无意访问到该网址
+        post_code = request.data.get('code')
+        if not post_code:
+            return HttpResponse('error')
+
+        real_code = user_cache.get('check_code')
+        if post_code != real_code:
+            print(post_code)
+            return HttpResponse('请重新输入验证码')
 
         username = request.data.get('username')
         password = request.data.get('password')
-
         # 自定义验证 可以使用 用户名密码 邮箱登录
-        superadmin = authenticate(request=request, username=username, password=password)
-        print(superadmin)
+        user = authenticate(request=request, username=username, password=password)
+        superadmin = SuperAdmin.objects.filter(user=user).first()
         if superadmin:
-
             token = uuid.uuid4().hex    # 生成随机token  当做 key值
             # redis缓存中 token 当做 key 值  保存 用户 id
             user_cache.set(token, superadmin.id, settings.SUPER_ADMIN_ALIVE)
             request.session['token'] = token    # 保存到 浏览器中一份
 
-            return redirect(reverse('administrator:scenicspot'))
+            return redirect(reverse('administrator:superadminindex'))
 
-        return redirect(reverse('administrator:superadminlogin'))
+        return HttpResponse('登录入口出错')
 
 
-# 原设想二次验证成功 则跳转到  超级管理员的  主页
-# 可以添加  删除 游乐场  管理员信息
-'''
-class SecondCheckLogin(ListCreateAPIView):
-    serializer_class = SuperAdminSerializer
-    authentication_classes = (SuperAdminAuth, )
+# 主页展示
+class SuperAdminIndexAPIView(ListAPIView):
+    serializer_class = ScenicSpotAdminSerializer
+    queryset = ScenicSpot.objects.all()
+
+    authentication_classes = (SuperAdminAuth,)
+    permission_classes = (SuperAdminPermission,)
+
+    def list(self, request, *args, **kwargs):
+        user = request.user
+        if isinstance(user, AnonymousUser):
+            return Response({'code': 1, 'msg': '未登录'})
+
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        if not queryset:
+            return Response({'code': 1, 'msg': '无数据'})
+
+        serializer = self.get_serializer(queryset, many=True)
+
+        return Response(serializer.data)
+
+
+# 添加景点
+class ScenicSpotCreateAPIView(CreateAPIView):
+    serializer_class = ScenicSpotSerializer
+
+    authentication_classes = (SuperAdminAuth,)
+    permission_classes = (SuperAdminPermission,)
 
     def get(self, request, *args, **kwargs):
-        superadmin = request.user
 
-        # 如果是AnonymousUser表示返回值为空验证未通过
-        if isinstance(superadmin, AnonymousUser):
-            return Response({'code': 1, 'msg': '警告'})
-
-        # 发送邮件。
-
-        return Response(data={'code': 1, 'msg': '二次验证页面'})
+        return HttpResponse('添加景点界面')
 
     def post(self, request, *args, **kwargs):
+        user = request.user
+        if isinstance(user, AnonymousUser):
+            return Response({'code': 1, 'msg': '未登录'})
 
-        # 获取管理员输入的 验证码 判断是否与 缓存中保存的一致
-        check_code = request.data.get('check_code')
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
 
-        response = redirect(reverse('administrator:scenicspot'))
-        response.delete_cookie('token')
+# 点击景点信息右侧进入详情页  可 修改 删除
+class ScenicUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
 
-        return response
-'''
+    serializer_class = ScenicSpotSerializer
 
-
-class ScenicSpotAPIView(APIView):
-
-    authentication_classes = (SuperAdminAuth, )
+    authentication_classes = (SuperAdminAuth,)
+    permission_classes = (SuperAdminPermission,)
 
     def get(self, request, *args, **kwargs):
         user = request.user
         if isinstance(user, AnonymousUser):
-            return Response({'code': 1, 'msg': '没有权限'})
+            return Response({'code': 1, 'msg': '未登录'})
 
-        return HttpResponse('hhh')
+        scenic_id = int(request.query_params.get('scenic_id'))
+        instance = ScenicSpot.objects.get(pk=scenic_id)
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    # 直接重写 update 就可以完成 update patch的返回
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+
+        scenic_id = int(request.query_params.get('scenic_id'))
+        instance = ScenicSpot.objects.get(pk=scenic_id)
+
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        if getattr(instance, '_prefetched_objects_cache', None):
+            # If 'prefetch_related' has been applied to a queryset, we need to
+            # forcibly invalidate the prefetch cache on the instance.
+            instance._prefetched_objects_cache = {}
+
+        return Response(serializer.data)
+
+    def delete(self, request, *args, **kwargs):
+
+        scenic_id = request.query_params.get('scenic_id')
+        instance = ScenicSpot.objects.get(pk=scenic_id)
+
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# 添加管理员信息  界面应该有所有 没有管理员的景点名称及ID
+class AdminUserCreateAPIView(CreateAPIView):
+    serializer_class = UserSerializer
+
+    authentication_classes = (SuperAdminAuth,)
+    permission_classes = (SuperAdminPermission,)
+
+    def get(self, request, *args, **kwargs):
+
+        # 获取到所有未 有 管理员的 景区  只有 未有管理员的景区才能创建时加入
+        instances = ScenicSpot.objects.filter(adminuser=None)
+
+        if instances.count() == 0:
+            return Response({'code':  1, 'msg': '所有景区都已经有管理员了。。如果想要添加新的管理员 请取消一个管理员的职位'})
+        for instance in instances:
+            print(instance.name)
+
+        return HttpResponse('添加景点界面')
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+
+        user = User.objects.get(username=serializer.data.get('username'))
+        user.set_password(user.password)
+        user.save()
+
+        scenic_id = int(request.data.get('scenic_id'))
+        admin_user = AdminUser.objects.create(user=user, phone=request.data.get('phone'), scenicspot_id=scenic_id)
+
+        new_serializer = AdminScenicSpotSerializer(instance=admin_user)
+
+        return Response(new_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+
+# 管理员 修改 删除
+class AdminUserUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
+
+    serializer_class = AdminScenicSpotSerializer
+
+    authentication_classes = (SuperAdminAuth,)
+    permission_classes = (SuperAdminPermission,)
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        if isinstance(user, AnonymousUser):
+            return Response({'code': 1, 'msg': '未登录'})
+
+        admin_id = int(request.query_params.get('admin_id'))
+        instance = AdminUser.objects.get(pk=admin_id)
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+
+        admin_id = int(request.data.get('admin_id'))
+        adminuser = AdminUser.objects.get(pk=admin_id)
+        instance = adminuser.user
+
+        serializer = UserSerializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        scenicspot_id = request.data.get('scenic_id')
+        if scenicspot_id:
+            adminuser.scenicspot_id = int(scenicspot_id)
+            adminuser.save()
+
+        if getattr(instance, '_prefetched_objects_cache', None):
+            # If 'prefetch_related' has been applied to a queryset, we need to
+            # forcibly invalidate the prefetch cache on the instance.
+            instance._prefetched_objects_cache = {}
+
+        new_serializer = AdminScenicSpotSerializer(adminuser)
+        return Response(new_serializer.data)
+
+    def delete(self, request, *args, **kwargs):
+        admin_id = request.data.get('admin_id')
+        instance = AdminUser.objects.get(pk=admin_id)
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+

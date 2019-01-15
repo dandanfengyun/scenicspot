@@ -59,7 +59,7 @@ ROOT_URLCONF = 'ScenicSpotProject.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [os.path.join(BASE_DIR, 'templates'),],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -133,7 +133,7 @@ STATICFILES_DIRS = [
 ]
 
 # 默认验证方式
-AUTHENTICATION_BACKENDS = ('administrator.auth.MyBackend',)
+AUTHENTICATION_BACKENDS = ('administrator.myauth.MyBackend',)
 
 
 # 缓存设置
@@ -156,7 +156,7 @@ CACHES = {
 
 # 用户登录缓存时间
 SUPER_ADMIN_ALIVE = 60*60*24    # 一天
-
+ADMIN_USER_ALIVE = 60*60*24*7   # 一周
 
 # 配置邮箱
 
