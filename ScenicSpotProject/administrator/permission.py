@@ -10,3 +10,12 @@ class SuperAdminPermission(BasePermission):
             user = superadmin.user
             return user.is_superuser
         return False
+
+
+class AdminUserPermission(BasePermission):
+    def has_permission(self, request, view):
+        adminuser = request.user
+        if not isinstance(adminuser, AnonymousUser):
+            if adminuser.is_adminuser:
+                return True
+        return False

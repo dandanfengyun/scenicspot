@@ -5,7 +5,7 @@ from rest_framework.authentication import BaseAuthentication
 
 from .models import SuperAdmin, AdminUser
 
-cache = caches['user']
+admin_cache = caches['admin']
 
 
 # 验证登录
@@ -38,7 +38,7 @@ class SuperAdminAuth(BaseAuthentication):
         if not token:
             return None
 
-        s_id = cache.get(token)
+        s_id = admin_cache.get(token)
         if not s_id:
             return None
 
@@ -55,11 +55,12 @@ class AdminUserAuth(BaseAuthentication):
         if not token:
             return None
 
-        s_id = cache.get(token)
-        if not s_id:
+        user_id = admin_cache.get(token)
+        if not user_id:
             return None
 
-        adminuser = AdminUser.objects.filter(pk=s_id).first()
+        user = User.objects.filter(pk=user_id).first()
+        adminuser = AdminUser.objects.filter(user=user).first()
         if adminuser:
             return adminuser, token
 

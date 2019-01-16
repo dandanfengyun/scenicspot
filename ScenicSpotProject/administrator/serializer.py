@@ -50,5 +50,21 @@ class AdminScenicSpotSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = AdminUser
-        fields = ['user', 'phone', 'scenicspot']
+        fields = ['id', 'user', 'phone', 'scenicspot']
 
+
+# 景区门票
+class ScenicSpotTicketSerializer(serializers.ModelSerializer):
+    scenic = ScenicSpotSerializer()
+    class Meta:
+        model = ScenicTicket
+        fields = ['id', 'scenic', 'ticket_price', 'tickets_one_day', 'is_opened']
+
+
+# 员工 信息
+class StaffSerializer(serializers.ModelSerializer):
+    user = UserSerializer()
+
+    class Meta:
+        model = Staff
+        fields = ['id', 'user', 'phone']

@@ -25,7 +25,7 @@ from .models import SuperAdmin
 from .serializer import *
 from .tasks import send_code
 
-user_cache = caches['user']
+admin_cache = caches['admin']
 
 
 # 只可注册一次。
@@ -69,7 +69,7 @@ class SuperAdminLogin(ListCreateAPIView):
         code = generate_code()
         send_code.delay('2942035955@qq.com', code)
         # 保存到缓存一份
-        user_cache.set('check_code', code, 60*5)     # 五分钟失效
+        admin_cache.set('check_code', code, 60*5)     # 五分钟失效
         return Response(data={'code': 1, 'msg': '假装登录页面'})
 
     def post(self, request, *args, **kwargs):
@@ -79,9 +79,8 @@ class SuperAdminLogin(ListCreateAPIView):
         if not post_code:
             return HttpResponse('error')
 
-        real_code = user_cache.get('check_code')
+        real_code = admin_cache.get('check_code')
         if post_code != real_code:
-            print(post_code)
             return HttpResponse('请重新输入验证码')
 
         username = request.data.get('username')
@@ -92,7 +91,7 @@ class SuperAdminLogin(ListCreateAPIView):
         if superadmin:
             token = uuid.uuid4().hex    # 生成随机token  当做 key值
             # redis缓存中 token 当做 key 值  保存 用户 id
-            user_cache.set(token, superadmin.id, settings.SUPER_ADMIN_ALIVE)
+            admin_cache.set(token, superadmin.id, settings.SUPER_ADMIN_ALIVE)
             request.session['token'] = token    # 保存到 浏览器中一份
 
             return redirect(reverse('administrator:superadminindex'))
@@ -195,7 +194,7 @@ class ScenicUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# 添加管理员信息  界面应该有所有 没有管理员的景点名称及ID
+# 添加景点管理员信息  界面应该有所有 没有管理员的景点名称及ID
 class AdminUserCreateAPIView(CreateAPIView):
     serializer_class = UserSerializer
 
@@ -209,10 +208,9 @@ class AdminUserCreateAPIView(CreateAPIView):
 
         if instances.count() == 0:
             return Response({'code':  1, 'msg': '所有景区都已经有管理员了。。如果想要添加新的管理员 请取消一个管理员的职位'})
-        for instance in instances:
-            print(instance.name)
 
-        return HttpResponse('添加景点界面')
+        serializer = ScenicSpotSerializer(instances, many=True)
+        return Response(serializer.data)
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
@@ -241,30 +239,33 @@ class AdminUserUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
     permission_classes = (SuperAdminPermission,)
 
     def get(self, request, *args, **kwargs):
-        user = request.user
-        if isinstance(user, AnonymousUser):
-            return Response({'code': 1, 'msg': '未登录'})
 
         admin_id = int(request.query_params.get('admin_id'))
-        instance = AdminUser.objects.get(pk=admin_id)
-        serializer = self.get_serializer(instance)
+        adminuser = AdminUser.objects.filter(pk=admin_id).first()
+        if not adminuser:
+            return HttpResponse('没有你查个什么东西')
+
+        serializer = self.get_serializer(adminuser)
         return Response(serializer.data)
 
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
 
-        admin_id = int(request.data.get('admin_id'))
-        adminuser = AdminUser.objects.get(pk=admin_id)
+        admin_id = int(request.data.get('admin_id', 0))
+
+        adminuser = AdminUser.objects.filter(pk=admin_id).first()
+        if not adminuser:
+            return HttpResponse('没有你改个什么东西')
+
         instance = adminuser.user
 
         serializer = UserSerializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
 
-        scenicspot_id = request.data.get('scenic_id')
-        if scenicspot_id:
-            adminuser.scenicspot_id = int(scenicspot_id)
-            adminuser.save()
+        adminuser.phone = request.data.get('phone', adminuser.phone)
+        adminuser.scenicspot_id = int(request.data.get('scenicspot_id', adminuser.scenicspot_id))
+        adminuser.save()
 
         if getattr(instance, '_prefetched_objects_cache', None):
             # If 'prefetch_related' has been applied to a queryset, we need to
@@ -275,9 +276,13 @@ class AdminUserUpdateDestroyAPIView(RetrieveUpdateDestroyAPIView):
         return Response(new_serializer.data)
 
     def delete(self, request, *args, **kwargs):
-        admin_id = request.data.get('admin_id')
-        instance = AdminUser.objects.get(pk=admin_id)
-        self.perform_destroy(instance)
+        admin_id = request.data.get('admin_id', 0)
+        adminuser = AdminUser.objects.filter(pk=admin_id).first()
+        if not adminuser:
+            return HttpResponse('没有你删个什么东西')
+        user = adminuser.user
+        self.perform_destroy(adminuser)
+        user.delete()   # 删除掉user表中信息
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
